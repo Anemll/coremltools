@@ -162,6 +162,7 @@ _FRONTEND_TORCH_PASSES: List[Text] = [
     "common::dead_code_elimination",
     "torch::torch_upsample_to_core_upsample",
     "torch::torch_tensor_assign_to_core",
+    "common::fuse_rms_norm",
 ]
 
 _FRONTEND_TF1_PASSES: List[Text] = [

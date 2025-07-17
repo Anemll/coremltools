@@ -39,9 +39,14 @@ class RMSNorm(nn.Module):
 model = RMSNorm(512)
 model.eval()
 
+# Create example input and trace model
+example_input = torch.randn(1, 128, 512)
+traced_model = torch.jit.trace(model, example_input)
+
 # Convert to Core ML with ANE optimization
 mlmodel = ct.convert(
-    model,
+    traced_model,
+    source="pytorch",
     inputs=[ct.TensorType(shape=(1, 128, 512))],
     compute_units=ct.ComputeUnit.CPU_AND_NE,
     minimum_deployment_target=ct.target.iOS15,
@@ -82,9 +87,14 @@ pipeline.set_options("common::lower_ane_rms_norm_to_layer_norm", {
     "compute_units": ct.ComputeUnit.CPU_AND_NE
 })
 
+# Create example input and trace model
+example_input = torch.randn(1, 128, 512)
+traced_model = torch.jit.trace(model, example_input)
+
 # Convert with custom pipeline
 mlmodel = ct.convert(
-    model,
+    traced_model,
+    source="pytorch",
     inputs=[ct.TensorType(shape=(1, 128, 512))],
     compute_units=ct.ComputeUnit.CPU_AND_NE,
     pass_pipeline=pipeline,

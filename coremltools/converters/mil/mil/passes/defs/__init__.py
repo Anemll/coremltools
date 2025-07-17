@@ -11,6 +11,7 @@ from .optimize_deployment_target import (
 from .optimize_elementwise_binary import select_optimization
 from .optimize_normalization import fuse_elementwise_to_batchnorm, fuse_layernorm_or_instancenorm
 from .ane_rms_norm_to_layer_norm import lower_ane_rms_norm_to_layer_norm
+from .fuse_rms_norm import fuse_rms_norm
 from .optimize_quantization import (
     canonicalize_quantized_lut_pattern,
     dequantize_quantize_pair_elimination,
