@@ -20,6 +20,15 @@ from coremltools.optimize.coreml import (
     OpThresholdPrunerConfig,
     OptimizationConfig,
 )
+from .defs.optimize_quantization import (
+    dequantize_quantize_pair_elimination,
+    distributive_quantized_binary_op_scale_normalization,
+    dequantize_to_constexpr,
+    canonicalize_quantized_lut_pattern,
+    nullify_redundant_quantization_zero_point,
+    int_op_canonicalization,
+)
+from .defs.ane_rms_norm_to_layer_norm import lower_ane_rms_norm_to_layer_norm
 
 _COMMON_PASSES: List[Text] = [
     "common::lower_complex_dialect_ops",
@@ -70,6 +79,7 @@ _COMMON_PASSES: List[Text] = [
     "common::fuse_conv_scale",
     "common::fuse_conv_bias",
     "common::fuse_onehot_matmul_to_gather",
+    "common::lower_ane_rms_norm_to_layer_norm",
     "common::fuse_layernorm_or_instancenorm",
     # should come after reduce_transposes, to detect instance_norm
     "common::fuse_elementwise_to_batchnorm",  # should come after fuse_layernorm_or_instancenorm

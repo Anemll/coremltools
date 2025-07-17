@@ -23,6 +23,7 @@ from .elementwise_unary import cast, clip, inverse, log, rsqrt
 from .image_resizing import crop_resize, resample, resize
 from .linear import linear, matmul
 from .normalization import batch_norm, instance_norm, l2_norm, layer_norm, local_response_norm
+from .ane_rms_norm import ane_rms_norm
 from .quantization_ops import dequantize, quantize
 from .recurrent import gru, lstm, rnn
 from .reduction import reduce_argmax, reduce_argmin

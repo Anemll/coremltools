@@ -31,6 +31,7 @@ from .image_resizing import (affine, crop, crop_resize, resample,
 from .linear import einsum, linear, matmul
 from .normalization import (batch_norm, instance_norm, l2_norm, layer_norm,
                             local_response_norm)
+from .ane_rms_norm import ane_rms_norm
 from .pool import avg_pool, l2_pool, max_pool
 from .random import (random_bernoulli, random_categorical, random_normal,
                      random_uniform)

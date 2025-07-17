@@ -3844,7 +3844,7 @@ class TestConvScaleFusion:
 
         # get the updated weight from the prog
         conv_op = []
-        for op in prog["main"].operations:
+        for op in prog['main'].operations:
             if op.op_type == "const":
                 continue
             conv_op.append(op)
