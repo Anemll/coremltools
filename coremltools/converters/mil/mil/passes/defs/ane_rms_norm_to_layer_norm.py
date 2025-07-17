@@ -7,6 +7,7 @@ from coremltools.converters.mil.mil import Builder as mb
 from coremltools.converters.mil.mil.passes.graph_pass import AbstractGraphPass
 from coremltools.converters.mil.mil.passes.pass_registry import register_pass
 from coremltools.converters.mil.mil.passes.helper import block_context_manager
+from coremltools import ComputeUnit
 
 
 @register_pass(namespace="common")
@@ -19,9 +20,39 @@ class lower_ane_rms_norm_to_layer_norm(AbstractGraphPass):
         3. Layer Normalization on the concatenated tensor
         4. Slice to get the first half
         5. Multiply by the learnable weight (gamma)
+    
+    This pass only runs when the target compute unit includes the Neural Engine (ANE).
+    
+    Support options:
+    - ``compute_units``: Only run this pass if the compute units include Neural Engine.
+                        Valid values: ComputeUnit.ALL, ComputeUnit.CPU_AND_NE, 
+                        ComputeUnit.CPU_ONLY, ComputeUnit.CPU_AND_GPU.
+                        Default: Run for all compute units (no filtering).
     """
 
+    def __init__(self):
+        self._compute_units = None
+
+    @property
+    def compute_units(self):
+        return self._compute_units
+
+    @compute_units.setter
+    def compute_units(self, compute_units):
+        if compute_units is not None and not isinstance(compute_units, ComputeUnit):
+            raise TypeError(
+                f"compute_units must be of type ComputeUnit, but got {type(compute_units)}"
+            )
+        self._compute_units = compute_units
+
     def apply(self, prog):
+        # Check if we should run this pass based on compute units
+        if self._compute_units is not None:
+            # Only run if compute units include Neural Engine
+            if self._compute_units not in [ComputeUnit.ALL, ComputeUnit.CPU_AND_NE]:
+                # Skip this pass if compute units don't include Neural Engine
+                return
+        
         for f in prog.functions.values():
             self._lower_ane_rms_norm_to_layer_norm_block(f)
 

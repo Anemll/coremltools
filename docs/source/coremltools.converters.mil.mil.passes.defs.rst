@@ -74,6 +74,10 @@ optimize_normalization
 
     .. autoclass:: fuse_layernorm_or_instancenorm
 
+.. automodule:: coremltools.converters.mil.mil.passes.defs.ane_rms_norm_to_layer_norm
+
+    .. autoclass:: lower_ane_rms_norm_to_layer_norm
+
 
 optimize_quantization
 ---------------------------------------------------------
