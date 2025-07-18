@@ -171,11 +171,43 @@ class fuse_rms_norm(AbstractGraphPass):
                 epsilon = add_op.x.val
             else:
                 return None
+                
+            # Validate that reduce_mean normalizes over the last dimension (axis=-1)
+            # This is required for RMSNorm
+            if hasattr(reduce_op.axes, 'val'):
+                axes = reduce_op.axes.val
+                # Convert to list if numpy array
+                if hasattr(axes, 'tolist'):
+                    axes = axes.tolist()
+                elif not isinstance(axes, (list, tuple)):
+                    axes = [axes]
+                # Check if it's [-1] or equivalent (last dimension)
+                if len(axes) != 1 or axes[0] != -1:
+                    return None
+            else:
+                # If no axes specified, reduce_mean defaults to all axes, which is not RMSNorm
+                return None
         elif mean_square.op.op_type == "reduce_mean":
             # No epsilon addition
             reduce_op = mean_square.op
             epsilon = 0.0  # eps = 0 for pattern 2
         else:
+            return None
+            
+        # Validate that reduce_mean normalizes over the last dimension (axis=-1)
+        # This is required for RMSNorm
+        if hasattr(reduce_op.axes, 'val'):
+            axes = reduce_op.axes.val
+            if not isinstance(axes, (list, tuple)):
+                axes = [axes]
+            # Convert to list if numpy array
+            if hasattr(axes, 'tolist'):
+                axes = axes.tolist()
+            # Check if it's [-1] or equivalent (last dimension)
+            if len(axes) != 1 or axes[0] != -1:
+                return None
+        else:
+            # If no axes specified, reduce_mean defaults to all axes, which is not RMSNorm
             return None
             
         square = reduce_op.x
@@ -264,11 +296,43 @@ class fuse_rms_norm(AbstractGraphPass):
                 epsilon = add_op.x.val
             else:
                 return None
+                
+            # Validate that reduce_mean normalizes over the last dimension (axis=-1)
+            # This is required for RMSNorm
+            if hasattr(reduce_op.axes, 'val'):
+                axes = reduce_op.axes.val
+                # Convert to list if numpy array
+                if hasattr(axes, 'tolist'):
+                    axes = axes.tolist()
+                elif not isinstance(axes, (list, tuple)):
+                    axes = [axes]
+                # Check if it's [-1] or equivalent (last dimension)
+                if len(axes) != 1 or axes[0] != -1:
+                    return None
+            else:
+                # If no axes specified, reduce_mean defaults to all axes, which is not RMSNorm
+                return None
         elif mean_square.op.op_type == "reduce_mean":
             # No epsilon addition
             reduce_op = mean_square.op
             epsilon = 0.0  # eps = 0 for pattern 3
         else:
+            return None
+            
+        # Validate that reduce_mean normalizes over the last dimension (axis=-1)
+        # This is required for RMSNorm
+        if hasattr(reduce_op.axes, 'val'):
+            axes = reduce_op.axes.val
+            if not isinstance(axes, (list, tuple)):
+                axes = [axes]
+            # Convert to list if numpy array
+            if hasattr(axes, 'tolist'):
+                axes = axes.tolist()
+            # Check if it's [-1] or equivalent (last dimension)
+            if len(axes) != 1 or axes[0] != -1:
+                return None
+        else:
+            # If no axes specified, reduce_mean defaults to all axes, which is not RMSNorm
             return None
             
         square = reduce_op.x

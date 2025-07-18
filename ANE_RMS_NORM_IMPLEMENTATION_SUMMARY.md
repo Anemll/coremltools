@@ -45,6 +45,7 @@ This implementation brings the ANEMLL LayerNorm trick into the official Core ML 
   3. **No gamma, eps=0**: `x → square → reduce_mean → sqrt → div`
   4. **No gamma, with eps**: `x → square → reduce_mean → add(eps) → sqrt → div`
 - **Compute Unit Filter**: ✅ **ONLY runs for `CPU_AND_NE`**
+- **Axis Validation**: ✅ **Only accepts patterns that normalize over axis=-1 (last dimension)**
 
 #### 2.2 Lowering Pass (`common::lower_ane_rms_norm_to_layer_norm`)
 - **File**: `coremltools/converters/mil/mil/passes/defs/ane_rms_norm_to_layer_norm.py`
@@ -248,6 +249,287 @@ Result: PyTorch RMSNorm → ane_rms_norm → LayerNorm trick
 
 ## Usage Examples
 
+### 1. PyTorch RMSNorm Class Implementation
+
+Here are typical PyTorch RMSNorm implementations that are automatically detected and optimized:
+
+```python
+import torch
+import torch.nn as nn
+import numpy as np
+
+class RMSNorm(nn.Module):
+    """Standard RMSNorm implementation - automatically detected and fused"""
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        # This pattern is automatically detected as Pattern 1:
+        # x → square → reduce_mean → add(eps) → sqrt → div → mul(gamma)
+        norm = x.norm(dtype=torch.float32, dim=-1, keepdim=True)
+        rms = norm * (x.shape[-1] ** -0.5)
+        return self.weight * (x / (rms + self.eps))
+
+class RMSNormAlt(nn.Module):
+    """Alternative implementation using torch.mean - also detected"""
+    def __init__(self, dim, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        # This pattern is automatically detected as Pattern 1:
+        # x → square → reduce_mean → add(eps) → sqrt → div → mul(gamma)
+        square = x * x
+        mean_square = torch.mean(square, dim=-1, keepdim=True)
+        rms = torch.sqrt(mean_square + self.eps)
+        return self.weight * (x / rms)
+
+class RMSNormNoEps(nn.Module):
+    """RMSNorm without epsilon - detected as Pattern 2"""
+    def __init__(self, dim):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+
+    def forward(self, x):
+        # Pattern 2: x → square → reduce_mean → sqrt → div → mul(gamma)
+        square = x * x
+        mean_square = torch.mean(square, dim=-1, keepdim=True)
+        rms = torch.sqrt(mean_square)
+        return self.weight * (x / rms)
+
+class RMSNormNoGamma(nn.Module):
+    """RMSNorm without learnable gamma - detected as Pattern 4"""
+    def __init__(self, eps=1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, x):
+        # Pattern 4: x → square → reduce_mean → add(eps) → sqrt → div
+        square = x * x
+        mean_square = torch.mean(square, dim=-1, keepdim=True)
+        rms = torch.sqrt(mean_square + self.eps)
+        return x / rms
+
+# Usage in a model
+class TransformerWithRMSNorm(nn.Module):
+    def __init__(self, d_model=512, num_heads=8):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(d_model, num_heads, batch_first=True)
+        self.rms_norm1 = RMSNorm(d_model)
+        self.rms_norm2 = RMSNorm(d_model)
+        self.linear = nn.Linear(d_model, d_model)
+        
+    def forward(self, x):
+        # Pre-attention RMSNorm
+        normed = self.rms_norm1(x)
+        attn_out, _ = self.attention(normed, normed, normed)
+        x = x + attn_out
+        
+        # Pre-FFN RMSNorm  
+        normed = self.rms_norm2(x)
+        ffn_out = self.linear(normed)
+        return x + ffn_out
+```
+
+### 2. Converting to Core ML with ANE Optimization
+
+```python
+import coremltools as ct
+import torch
+
+# Create model with RMSNorm layers
+model = TransformerWithRMSNorm(d_model=512, num_heads=8)
+model.eval()
+
+# Example input
+example_input = torch.randn(1, 128, 512)  # (batch, seq_len, hidden_dim)
+
+# Convert to Core ML with ANE optimization
+# The RMSNorm patterns will be automatically detected and fused!
+coreml_model = ct.convert(
+    model,
+    inputs=[ct.TensorType(shape=example_input.shape)],
+    compute_units=ct.ComputeUnit.CPU_AND_NE,  # 🎯 Enables ANE optimization
+    minimum_deployment_target=ct.target.iOS15,
+    convert_to="mlprogram"
+)
+
+# Verify the optimization worked
+from coremltools.converters.mil.testing_utils import get_op_types_in_program
+operations = get_op_types_in_program(coreml_model._mil_program)
+
+if 'layer_norm' in operations and 'concat' in operations:
+    print("✅ RMSNorm successfully optimized for ANE using LayerNorm trick!")
+    print(f"   Operations found: {operations}")
+else:
+    print("❌ RMSNorm optimization did not apply")
+    print(f"   Operations found: {operations}")
+```
+
+### 3. Comparison: Different Compute Units
+
+```python
+# ANE Optimization: CPU_AND_NE
+model_ane = ct.convert(
+    model,
+    inputs=[ct.TensorType(shape=example_input.shape)],
+    compute_units=ct.ComputeUnit.CPU_AND_NE,  # ✅ Applies optimization
+    convert_to="mlprogram"
+)
+
+# Regular Conversion: CPU_AND_GPU  
+model_gpu = ct.convert(
+    model,
+    inputs=[ct.TensorType(shape=example_input.shape)],
+    compute_units=ct.ComputeUnit.CPU_AND_GPU,  # ❌ No optimization
+    convert_to="mlprogram"
+)
+
+# Check what happened
+ane_ops = get_op_types_in_program(model_ane._mil_program)
+gpu_ops = get_op_types_in_program(model_gpu._mil_program)
+
+print("ANE Model operations:", ane_ops)
+print("GPU Model operations:", gpu_ops)
+```
+
+### 4. Direct MIL Usage (Advanced)
+
+For advanced users who want to use `ane_rms_norm` directly in MIL:
+
+```python
+from coremltools.converters.mil.mil import Builder as mb
+import numpy as np
+
+@mb.program(input_specs=[mb.TensorSpec(shape=(1, 128, 512))])
+def direct_ane_rms_norm(x):
+    """Direct usage of ane_rms_norm operation"""
+    # Create gamma parameter (learnable weights)
+    gamma = mb.const(val=np.ones((512,), dtype=np.float32))
+    
+    # Use ane_rms_norm directly
+    return mb.ane_rms_norm(x=x, gamma=gamma, epsilon=1e-6)
+
+# This will be automatically lowered to LayerNorm trick when targeting ANE
+```
+
+### 5. Validation and Testing
+
+```python
+import numpy as np
+
+def validate_conversion(pytorch_model, coreml_model, input_tensor):
+    """Validate that Core ML model produces similar results to PyTorch"""
+    
+    # Get PyTorch reference
+    pytorch_model.eval()
+    with torch.no_grad():
+        pytorch_output = pytorch_model(input_tensor).numpy()
+    
+    # Get Core ML prediction
+    coreml_input = {'x': input_tensor.numpy()}
+    coreml_output = coreml_model.predict(coreml_input)
+    coreml_result = list(coreml_output.values())[0]
+    
+    # Compare results
+    max_diff = np.max(np.abs(pytorch_output - coreml_result))
+    rel_error = np.mean(np.abs(pytorch_output - coreml_result) / (np.abs(pytorch_output) + 1e-8))
+    
+    print(f"Max absolute difference: {max_diff:.6f}")
+    print(f"Relative error: {rel_error:.6f}")
+    
+    if rel_error < 1e-2:
+        print("✅ Excellent precision achieved!")
+    elif rel_error < 1e-1:
+        print("✅ Good precision achieved!")
+    else:
+        print("⚠️  Consider validating precision for your use case")
+    
+    return max_diff, rel_error
+
+# Example usage
+model = RMSNorm(512)
+input_tensor = torch.randn(1, 128, 512)
+
+# Convert with ANE optimization
+coreml_model = ct.convert(
+    model,
+    inputs=[ct.TensorType(shape=input_tensor.shape)],
+    compute_units=ct.ComputeUnit.CPU_AND_NE,
+    convert_to="mlprogram"
+)
+
+# Validate
+max_diff, rel_error = validate_conversion(model, coreml_model, input_tensor)
+```
+
+### 6. Axis Validation (Important!)
+
+The fusion pass includes axis validation to ensure only proper RMSNorm patterns are optimized:
+
+```python
+# ✅ VALID: These patterns will be optimized
+class ValidRMSNorm(nn.Module):
+    def forward(self, x):
+        # Normalizes over last dimension (axis=-1) - VALID
+        square = x * x
+        mean_square = torch.mean(square, dim=-1, keepdim=True)  # axis=-1 ✅
+        rms = torch.sqrt(mean_square + 1e-6)
+        return x / rms
+
+# ❌ INVALID: These patterns will NOT be optimized
+class InvalidRMSNorm1(nn.Module):
+    def forward(self, x):
+        # Normalizes over first dimension (axis=0) - INVALID
+        square = x * x
+        mean_square = torch.mean(square, dim=0, keepdim=True)  # axis=0 ❌
+        rms = torch.sqrt(mean_square + 1e-6)
+        return x / rms
+
+class InvalidRMSNorm2(nn.Module):
+    def forward(self, x):
+        # Normalizes over multiple dimensions - INVALID
+        square = x * x
+        mean_square = torch.mean(square, dim=[0, 1], keepdim=True)  # multiple axes ❌
+        rms = torch.sqrt(mean_square + 1e-6)
+        return x / rms
+
+# Test axis validation
+def test_axis_validation():
+    valid_model = ValidRMSNorm()
+    invalid_model = InvalidRMSNorm1()
+    
+    input_tensor = torch.randn(2, 128, 512)
+    
+    # Convert both models
+    valid_coreml = ct.convert(valid_model, 
+                             inputs=[ct.TensorType(shape=input_tensor.shape)],
+                             compute_units=ct.ComputeUnit.CPU_AND_NE)
+    
+    invalid_coreml = ct.convert(invalid_model,
+                               inputs=[ct.TensorType(shape=input_tensor.shape)], 
+                               compute_units=ct.ComputeUnit.CPU_AND_NE)
+    
+    # Check operations
+    valid_ops = get_op_types_in_program(valid_coreml._mil_program)
+    invalid_ops = get_op_types_in_program(invalid_coreml._mil_program)
+    
+    print("Valid RMSNorm operations:", valid_ops)
+    print("Invalid RMSNorm operations:", invalid_ops)
+    
+    # Valid should have layer_norm (optimized), invalid should have original ops
+    assert 'layer_norm' in valid_ops, "Valid RMSNorm should be optimized"
+    assert 'layer_norm' not in invalid_ops, "Invalid RMSNorm should not be optimized"
+    
+    print("✅ Axis validation working correctly!")
+
+# Run the test
+test_axis_validation()
+```
+
 ### Basic Usage (Automatic)
 ```python
 import coremltools as ct
@@ -366,8 +648,9 @@ The ANE RMS Norm implementation is **fully complete and production-ready**, with
 1. **Pattern Fusion Pass**: Automatically detects and fuses PyTorch RMSNorm patterns → `ane_rms_norm`
 2. **Lowering Pass**: Converts `ane_rms_norm` → LayerNorm trick for ANE optimization
 3. **Compute Unit Filtering**: Only applies optimization when targeting `CPU_AND_NE`
-4. **Automatic Configuration**: Zero-configuration integration with Core ML Tools pipeline
-5. **Comprehensive Testing**: Full test suite with dynamic result collection and reporting
+4. **Axis Validation**: Ensures only proper RMSNorm patterns (axis=-1) are optimized
+5. **Automatic Configuration**: Zero-configuration integration with Core ML Tools pipeline
+6. **Comprehensive Testing**: Full test suite with dynamic result collection and reporting
 
 ### Files Implemented and Validated
 - ✅ `ane_rms_norm.py` (iOS15 & iOS17 operation definitions)

@@ -307,6 +307,60 @@ class TestAneRmsNormComprehensive:
         test_results.record_fusion_result("None", False)
         print("✅ None: Correctly skipped RMSNorm fusion when compute_units=None")
 
+    def test_fusion_rejects_wrong_axes(self):
+        """Test that fusion rejects patterns that don't use axis=-1."""
+        shape = (1, 128, 256)
+        
+        # Create a pattern that normalizes over axis=0 instead of axis=-1
+        # This should NOT be detected as RMSNorm
+        @mb.program(input_specs=[mb.TensorSpec(shape=shape)])
+        def prog(x):
+            gamma = np.ones(shape[0], dtype=np.float32)  # gamma for axis=0
+            x_squared = mb.mul(x=x, y=x)
+            # Wrong axis: normalize over axis=0 instead of axis=-1
+            mean_square = mb.reduce_mean(x=x_squared, axes=[0], keep_dims=True)
+            mean_square_eps = mb.add(x=mean_square, y=1e-5)
+            rms = mb.sqrt(x=mean_square_eps)
+            x_normed = mb.real_div(x=x, y=rms)
+            return mb.mul(x=x_normed, y=gamma)
+
+        # Apply fusion pass (should NOT detect this as RMSNorm)
+        pass_instance = fuse_rms_norm()
+        pass_instance.compute_units = ComputeUnit.CPU_AND_NE
+        
+        # Store original ops before fusion
+        original_ops = get_op_types_in_program(prog)
+        
+        # Apply the pass
+        pass_instance.apply(prog)
+        
+        # Should NOT have created ane_rms_norm (because it's not axis=-1)
+        final_ops = get_op_types_in_program(prog)
+        assert "ane_rms_norm" not in final_ops
+        assert "reduce_mean" in final_ops  # Original operations should remain
+        print("✅ Correctly rejected pattern with wrong axis (axis=0)")
+
+        # Test axis=[0, 1] case (multiple axes)
+        @mb.program(input_specs=[mb.TensorSpec(shape=shape)])
+        def prog_multi_axis(x):
+            gamma = np.ones(shape[-1], dtype=np.float32)
+            x_squared = mb.mul(x=x, y=x)
+            # Wrong axes: normalize over multiple axes
+            mean_square = mb.reduce_mean(x=x_squared, axes=[0, 1], keep_dims=True)
+            mean_square_eps = mb.add(x=mean_square, y=1e-5)
+            rms = mb.sqrt(x=mean_square_eps)
+            x_normed = mb.real_div(x=x, y=rms)
+            return mb.mul(x=x_normed, y=gamma)
+
+        # Apply fusion pass (should NOT detect this as RMSNorm)
+        pass_instance.apply(prog_multi_axis)
+        
+        # Should NOT have created ane_rms_norm (because it's not axis=[-1])
+        final_ops_multi = get_op_types_in_program(prog_multi_axis)
+        assert "ane_rms_norm" not in final_ops_multi
+        assert "reduce_mean" in final_ops_multi  # Original operations should remain
+        print("✅ Correctly rejected pattern with multiple axes")
+
     # ============================================================================
     # Compute Unit Testing for All 4 Combinations
     # ============================================================================
