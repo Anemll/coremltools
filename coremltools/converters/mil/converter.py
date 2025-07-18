@@ -220,6 +220,7 @@ def _mil_convert(
                             convert_from,
                             convert_to,
                             registry,
+                            compute_units=compute_units,
                             **kwargs
                          )
 
@@ -289,6 +290,15 @@ def mil_convert_to_proto(
     frontend_pipeline, backend_pipeline = _construct_other_pipelines(
         main_pipeline, convert_from, convert_to
     )
+
+    # Configure ANE passes with compute units
+    compute_units = kwargs.get("compute_units")
+    if compute_units and "common::fuse_rms_norm" in frontend_pipeline.passes:
+        # Always configure frontend fuse_rms_norm pass with compute_units
+        # The pass will decide internally whether to run based on compute_units
+        frontend_pipeline.set_options("common::fuse_rms_norm", {
+            "compute_units": compute_units
+        })
 
     frontend_converter = frontend_converter_type()
     prog = frontend_converter(model, **kwargs)

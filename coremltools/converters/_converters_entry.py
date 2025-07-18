@@ -638,6 +638,14 @@ def convert(
     if len(states) > 0 and exact_source != "pytorch":
         raise ValueError("'states' can only be passed with pytorch source model.")
 
+    # Configure ANE passes with compute units if targeting ANE
+    if compute_units == _ComputeUnit.CPU_AND_NE:
+        # Configure ANE-specific passes with compute units for proper targeting
+        # Only configure lowering pass here - fusion pass is in frontend pipeline
+        pass_pipeline.set_options("common::lower_ane_rms_norm_to_layer_norm", {
+            "compute_units": compute_units
+        })
+
     mlmodel = mil_convert(
         model,
         convert_from=exact_source,

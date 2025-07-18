@@ -77,6 +77,9 @@ optimize_normalization
 .. automodule:: coremltools.converters.mil.mil.passes.defs.ane_rms_norm_to_layer_norm
 
     .. autoclass:: lower_ane_rms_norm_to_layer_norm
+        :members:
+        :undoc-members:
+        :show-inheritance:
 
 
 optimize_quantization
