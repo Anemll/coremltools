@@ -23,6 +23,11 @@ The method defaults to `linear_symmetric`, which uses only per-channel scales an
 You can also choose a `linear` mode, which uses a zero-point, which may help to get 
 slightly better accuracy.
 
+For mlprogram models targeting iOS 26 or later, you can quantize to the FP8 formats
+`fp8e4m3fn` and `fp8e5m2` by setting `dtype` on `OpLinearQuantizerConfig`. FP8 weights and
+activations run on the Neural Engine of M6 and later. See [FP8 Quantization](opt-quantization-fp8)
+for the FP8-specific options (`fp8_max`, `fp8_encoding`), requirements, and caveats.
+
 For more details on the parameters available in the config, see the following in the API Reference:
 
 - [`OpLinearQuantizerConfig`](https://apple.github.io/coremltools/source/coremltools.optimize.coreml.config.html#coremltools.optimize.coreml.OpLinearQuantizerConfig)

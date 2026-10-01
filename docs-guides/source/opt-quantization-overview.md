@@ -29,7 +29,7 @@ Process of quantizing to int8.
 
 ### Quantization precision
 
-For quantizating weights, 8-bit as well as 4-bit precision is supported. For activation quantizations, 8-bit is supported.
+For quantizating weights, 8-bit as well as 4-bit precision is supported. For activation quantizations, 8-bit is supported. For mlprogram models targeted at iOS 26 or later, weights and activations can also be quantized to the FP8 formats `fp8e4m3fn` and `fp8e5m2`, which run on the Neural Engine of M6 and later. See [FP8 Quantization](opt-quantization-fp8) for details.
 
 ### Symmetric Quantization
 
