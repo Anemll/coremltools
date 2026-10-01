@@ -47,6 +47,13 @@ E4M3FN codes between 240 and 448 become infinity there. For that reason, FP8 wei
 to ±240 by default (`fp8_max=None` defaults to 240 for `fp8e4m3fn`). Activations keep the full
 ±448 range, which the Neural Engine handles. Pass `fp8_max=448` only for CPU-only models.
 
+```{note}
+Core AI's FP8 path (MPSGraph, which sends ANE-ready MLIR) accepts the full E4M3FN weight range of
+**±448**; coreai-opt scales FP8 weights to ±448. The Core ML MIL path is the stricter one. So a
+Core ML ANE model needs weights within ±240 even though the `fp8e4m3fn` dtype nominally reaches
+448 — the two stacks do not share the same effective weight range.
+```
+
 ## Quantizing Weights to FP8
 
 ```python
