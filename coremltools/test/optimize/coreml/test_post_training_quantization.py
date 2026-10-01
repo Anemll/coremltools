@@ -2756,11 +2756,11 @@ class TestErrorHandling:
             linear_quantize_weights(mlmodel, mode="invalid_mode")
 
         # Test invalid dtype for affine quantization
-        expected_err_str = "Should be int4/8 or uint4/8, but got int32"
+        expected_err_str = "Should be int4/8, uint4/8, fp8e4m3fn or fp8e5m2, but got int32"
         with pytest.raises(ValueError, match=expected_err_str):
             linear_quantize_weights(mlmodel, dtype=np.int32)
 
-        expected_err_str = "Should be int4/8 or uint4/8, but got int32"
+        expected_err_str = "Should be int4/8, uint4/8, fp8e4m3fn or fp8e5m2, but got int32"
         with pytest.raises(ValueError, match=expected_err_str):
             linear_quantize_weights(mlmodel, dtype="int32")
 

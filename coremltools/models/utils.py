@@ -1138,6 +1138,13 @@ def compile_model(
     if destination_path is not None and not destination_path.rstrip('/').endswith(".mlmodelc"):
         raise Exception("\"destination_path\" parameter must have \".mlmodelc\" file extension.")
 
+    # The Core ML compiler crashes on FP8 constexpr weights, so compile those packages around it.
+    if source_model_path is not None and _os.path.isdir(source_model_path):
+        from . import _fp8_compile
+
+        if _fp8_compile.needs_fp8_compile_workaround(load_spec(source_model_path)):
+            return _fp8_compile.compile_with_fp8_workaround(source_model_path, destination_path)
+
     # Compile model
     if source_model_path is None:
         with _tempfile.TemporaryDirectory() as save_dir:

@@ -15,6 +15,7 @@ from coremltools import (
     _SPECIFICATION_VERSION_IOS_15,
     _SPECIFICATION_VERSION_IOS_17,
     _SPECIFICATION_VERSION_IOS_18,
+    _SPECIFICATION_VERSION_IOS_26,
 )
 from coremltools import _logger as logger
 from coremltools import proto
@@ -64,6 +65,9 @@ def should_use_weight_file(
     supported_dtypes = ["float16", "float32", "uint8", "int8"]
     if specification_version >= _SPECIFICATION_VERSION_IOS_18:
         supported_dtypes += ["uint16", "int16", "int32", "uint32"]
+    if specification_version >= _SPECIFICATION_VERSION_IOS_26:
+        # ml_dtypes float8 arrays
+        supported_dtypes += ["float8_e4m3fn", "float8_e5m2"]
     return (
         val is not None
         and isinstance(val, (np.ndarray, np.generic))

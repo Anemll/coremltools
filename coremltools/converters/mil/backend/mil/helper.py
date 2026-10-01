@@ -96,7 +96,8 @@ def _tensor_field_by_type(tensor_val, builtin_type):
             return tensor_val.doubles.values
         elif builtin_type == types.fp32:
             return tensor_val.floats.values
-        elif builtin_type == types.fp16:
+        elif builtin_type in types.IMMEDIATE_VALUE_TYPES_IN_BYTES:
+            # fp16 and FP8
             return tensor_val.bytes.values
         else:
             raise TypeError(
@@ -124,7 +125,8 @@ def _set_empty_tensor_field_by_type(tensor_val, builtin_type):
             tensor_val.doubles.SetInParent()
         elif (builtin_type == types.fp32):
             tensor_val.floats.SetInParent()
-        elif (builtin_type == types.fp16):
+        elif builtin_type in types.IMMEDIATE_VALUE_TYPES_IN_BYTES:
+            # fp16 and FP8
             tensor_val.bytes.SetInParent()
         else:
             raise TypeError(
@@ -262,6 +264,15 @@ def _get_offset_by_writing_data(output_var, blob_writer):
         offset = blob_writer.write_uint4_data(np.ascontiguousarray(output_var.val.flatten()))
     elif output_var.dtype == types.uint6:
         offset = blob_writer.write_uint6_data(np.ascontiguousarray(output_var.val.flatten()))
+    elif output_var.dtype == types.fp8e4m3fn:
+        # FP8 values travel as their raw bytes, since numpy has no FP8 type.
+        offset = blob_writer.write_fp8e4m3fn_data(
+            np.ascontiguousarray(output_var.val.flatten()).view(np.uint8)
+        )
+    elif output_var.dtype == types.fp8e5m2:
+        offset = blob_writer.write_fp8e5m2_data(
+            np.ascontiguousarray(output_var.val.flatten()).view(np.uint8)
+        )
     elif output_var.val.dtype.kind == "f" and output_var.val.dtype.itemsize == 4:
         offset = blob_writer.write_float_data(np.ascontiguousarray(output_var.val.flatten()))
     elif output_var.val.dtype.kind == "f" and output_var.val.dtype.itemsize == 2:

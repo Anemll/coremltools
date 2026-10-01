@@ -9,7 +9,7 @@ from .global_methods import global_remap
 from .type_bool import bool, is_bool
 from .type_complex import complex, complex64, complex128, is_complex
 from .type_dict import dict, empty_dict
-from .type_double import double, float, fp16, fp32, fp64, is_float
+from .type_double import double, float, fp8e4m3fn, fp8e5m2, fp16, fp32, fp64, is_float, is_fp8
 from .type_globals_pseudo_type import globals_pseudo_type
 from .type_int import (
     _SUB_BYTE_TYPES,
@@ -44,6 +44,7 @@ from .type_list import empty_list, is_list, list
 from .type_mapping import (
     BUILTIN_TO_PROTO_TYPES,
     PROTO_TO_BUILTIN_TYPE,
+    builtin_to_fp8_max,
     builtin_to_string,
     get_nbits_int_builtin_type,
     is_builtin,
@@ -80,6 +81,8 @@ apply_delayed_types()
 
 # For immediate values, those types are stored in bytes (MIL parser reads those types from bytes).
 IMMEDIATE_VALUE_TYPES_IN_BYTES = (
+    fp8e4m3fn,
+    fp8e5m2,
     fp16,
     int4,
     int8,

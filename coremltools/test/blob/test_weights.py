@@ -167,6 +167,26 @@ class TestWeightBlob:
         output_arr = reader.read_float_data(offset)
         np.testing.assert_almost_equal(input_arr, output_arr)
 
+    @pytest.mark.parametrize("dtype_name", ["fp8e4m3fn", "fp8e5m2"])
+    def test_weight_blob_fp8(self, dtype_name):
+        ml_dtypes = pytest.importorskip("ml_dtypes")
+        np_dtype = {"fp8e4m3fn": ml_dtypes.float8_e4m3fn, "fp8e5m2": ml_dtypes.float8_e5m2}[dtype_name]
+        other_name = "fp8e5m2" if dtype_name == "fp8e4m3fn" else "fp8e4m3fn"
+
+        writer = BlobWriter(self.working_dir + "/net.wt")
+        input_arr = np.array([0.0, -1.5, 2.25, 0.0078125, -240.0, 448.0], dtype=np.float32).astype(np_dtype)
+        # FP8 data is passed as its raw bytes.
+        offset = getattr(writer, f"write_{dtype_name}_data")(input_arr.view(np.uint8))
+        writer = None
+
+        reader = BlobReader(self.working_dir + "/net.wt")
+        output_arr = getattr(reader, f"read_{dtype_name}_data")(offset).view(np_dtype)
+        np.testing.assert_array_equal(input_arr.view(np.uint8), output_arr.view(np.uint8))
+
+        # The blob records its FP8 format, so reading it as the other format fails.
+        with pytest.raises(RuntimeError):
+            getattr(reader, f"read_{other_name}_data")(offset)
+
 
 @pytest.mark.skipif(ct.utils._macos_version() < (15, 0),
                     reason="Multi-function only supported on macOS 15+")

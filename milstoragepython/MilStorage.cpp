@@ -48,6 +48,14 @@ namespace {
         return m_writer.WriteData<T>(uintSubByteSpan);
     }
 
+    template <typename T>
+    u_int64_t writeFp8Data(MILBlob::Blob::StorageWriter& m_writer,
+                           const py::array_t<uint8_t>& data) {
+        // numpy has no FP8 type, so the raw FP8 bytes are passed in as uint8.
+        auto byteSpan = MILBlob::Util::Span<const uint8_t>(data.data(), data.size());
+        return m_writer.WriteData(MILBlob::Util::SpanCast<const T>(byteSpan));
+    }
+
 }
 
 // These methods are needed in addition to the above template methods
@@ -115,6 +123,14 @@ u_int64_t MilStoragePythonWriter::write_fp16_data(const py::array_t<uint16_t>& d
     return m_writer->WriteData(fpSpan);
 }
 
+u_int64_t MilStoragePythonWriter::write_fp8e4m3fn_data(const py::array_t<uint8_t>& data) {
+    return writeFp8Data<MILBlob::Fp8E4M3FN>(*m_writer, data);
+}
+
+u_int64_t MilStoragePythonWriter::write_fp8e5m2_data(const py::array_t<uint8_t>& data) {
+    return writeFp8Data<MILBlob::Fp8E5M2>(*m_writer, data);
+}
+
 u_int64_t MilStoragePythonWriter::write_float_data(const py::array_t<float>& data){
     return writeData<float>(*m_writer, data);
 }
@@ -147,6 +163,15 @@ namespace {
         MILBlob::Util::Span<const uint8_t> packedValuesSpan = MILBlob::Util::CastFromBitSpan<const T>(uintSubByteSpanData);
         auto unpackedUIntSubByteData = MILBlob::UnPackSubByteVec<T>({packedValuesSpan.begin(), packedValuesSpan.end()}, uintSubByteSpanData.Size());
         return py::array_t<uint8_t>(unpackedUIntSubByteData.size(), reinterpret_cast<uint8_t*>(unpackedUIntSubByteData.data()));
+    }
+
+    template <typename T>
+    py::array_t<uint8_t> readFp8Data(MILBlob::Blob::StorageReader& m_reader,
+                                     uint64_t offset) {
+        // Returns the raw FP8 bytes as uint8, since numpy has no FP8 type.
+        auto fpView = m_reader.GetDataView<T>(offset);
+        auto byteView = MILBlob::Util::SpanCast<const uint8_t>(fpView);
+        return py::array_t<uint8_t>(byteView.Size(), byteView.Data());
     }
 }
 
@@ -211,6 +236,14 @@ py::array_t<uint16_t> MilStoragePythonReader::read_fp16_data(uint64_t offset) {
     auto intView = MILBlob::Util::SpanCast<const uint16_t>(fpView);
 
     return py::array_t<uint16_t> (intView.Size(), intView.Data());
+}
+
+py::array_t<uint8_t> MilStoragePythonReader::read_fp8e4m3fn_data(uint64_t offset) {
+    return readFp8Data<MILBlob::Fp8E4M3FN>(*m_reader, offset);
+}
+
+py::array_t<uint8_t> MilStoragePythonReader::read_fp8e5m2_data(uint64_t offset) {
+    return readFp8Data<MILBlob::Fp8E5M2>(*m_reader, offset);
 }
 
 py::array_t<float> MilStoragePythonReader::read_float_data(uint64_t offset) {

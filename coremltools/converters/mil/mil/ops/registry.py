@@ -59,6 +59,7 @@ class SSAOpRegistry:
         target.iOS16,
         target.iOS17,
         target.iOS18,
+        target.iOS26,
     )
     core_ops = defaultdict(dict)
     dialect_ops = {}

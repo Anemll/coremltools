@@ -57,11 +57,17 @@ def _normalize_dtype(dtype: Union[str, type]) -> type:
         try:
             dtype = types.string_to_builtin(dtype)
         except KeyError:
-            raise ValueError(f"Invalid dtype {dtype}. Only support int8/uint8/int4/uint4.")
+            raise ValueError(
+                f"Invalid dtype {dtype}. Only support int8/uint8/int4/uint4/fp8e4m3fn/fp8e5m2."
+            )
     elif np.issubdtype(dtype, np.integer):
         dtype = types.numpy_type_to_builtin_type(dtype)
     elif not types.is_builtin(dtype):
-        raise ValueError(f"dtype={dtype} is unsupported for OpLinearQuantizerConfig.")
+        # ml_dtypes.float8_e4m3fn / float8_e5m2
+        fp8_dtype = types.type_mapping._fp8_builtin_from_nptype(dtype)
+        if fp8_dtype is None:
+            raise ValueError(f"dtype={dtype} is unsupported for OpLinearQuantizerConfig.")
+        dtype = fp8_dtype
     return dtype
 
 
@@ -142,7 +148,7 @@ class OpLinearQuantizerConfig(OpCompressorConfig):
           :math:`[min(w_r), max(w_r)]`.
 
     dtype: str or np.generic or mil.type
-        Determines the quantized data type (int8/uint8/int4/uint4).
+        Determines the quantized data type (int8/uint8/int4/uint4/fp8e4m3fn/fp8e5m2).
 
         * The allowed values are:
             * ``np.int8`` (the default)
@@ -151,7 +157,12 @@ class OpLinearQuantizerConfig(OpCompressorConfig):
             * ``coremltools.converters.mil.mil.types.uint8``
             * ``coremltools.converters.mil.mil.types.int4``
             * ``coremltools.converters.mil.mil.types.uint4``
-            * strings to specify dtype such as "int4", "uint4", etc
+            * ``coremltools.converters.mil.mil.types.fp8e4m3fn`` (or ``ml_dtypes.float8_e4m3fn``)
+            * ``coremltools.converters.mil.mil.types.fp8e5m2`` (or ``ml_dtypes.float8_e5m2``)
+            * strings to specify dtype such as "int4", "uint4", "fp8e4m3fn", etc
+
+        * FP8 dtypes need ``minimum_deployment_target >= iOS26``, ``mode="linear_symmetric"``,
+          and the ``ml_dtypes`` package. The Neural Engine supports ``fp8e4m3fn`` only.
 
     granularity: str
         Granularity for quantization.
@@ -213,6 +224,32 @@ class OpLinearQuantizerConfig(OpCompressorConfig):
 
         For example, if ``weight_threshold = 1024`` and a weight tensor is of shape ``[10, 20, 1, 1]``, hence ``200``
         elements, it will not be pruned.
+
+    fp8_max: float
+        Only used for FP8 dtypes. The largest magnitude the quantized values are scaled to, so
+        ``scale = max(abs(x)) / fp8_max``.
+
+        * If not provided, weights use ``240`` for ``fp8e4m3fn``: the Neural Engine reads FP8
+          weights like IEEE E4M3 (largest finite value 240), and larger codes become infinity.
+          Pass ``448`` to use the full E4M3FN range for models that only run on the CPU.
+        * If not provided, activations use the full range (``448`` for ``fp8e4m3fn``, ``57344`` for
+          ``fp8e5m2``), which the Neural Engine handles.
+
+    fp8_encoding: str
+        Only used for FP8 weights. How the quantized weights are stored:
+
+        * ``"blockwise"`` (default): ``constexpr_blockwise_shift_scale`` with FP8 data. Supports all
+          granularities. The Core ML compiler in iOS 26 / macOS 27 crashes on these weights, so such
+          models only compile through coremltools (``MLModel``, ``utils.compile_model``), which works
+          around the crash; Xcode cannot compile them.
+        * ``"palette"``: ``constexpr_lut_to_dense`` with the FP8 codes as indices into a table of the
+          E4M3 values, with the scale applied around the consuming op
+          (``mul(x, a) -> conv/linear -> mul(scale / a)``). It compiles with the stock compiler,
+          including Xcode, and the Neural Engine runs it as native FP8 weights. Supports
+          ``fp8e4m3fn`` with ``"per_tensor"`` or ``"per_channel"`` granularity, for weights consumed
+          only by ``conv`` or ``linear`` ops; other weights are left unquantized. The two extra
+          ``mul`` ops per layer cost bandwidth when activations are large, so ``"blockwise"`` is
+          faster there.
     """
     mode: str = field(default="linear_symmetric", validator=validators.instance_of(str))
     dtype: Union[str, type] = field(default=types.int8, converter=_normalize_dtype)
@@ -225,6 +262,11 @@ class OpLinearQuantizerConfig(OpCompressorConfig):
         default=32, validator=check_block_size
     )
     weight_threshold: Optional[int] = field(default=2048, validator=validators.optional([validators.instance_of(int), _check_weight_threshold]))
+    fp8_max: Optional[float] = field(
+        default=None,
+        validator=validators.optional(validators.instance_of((int, float, np.integer, np.floating))),
+    )
+    fp8_encoding: str = field(default="blockwise", validator=validators.in_(("blockwise", "palette")))
 
     _WEIGHT_AFFINE_QUANTIZATION_MODES = ("LINEAR_SYMMETRIC", "LINEAR")
     _VALID_GRANULARITIES = (
@@ -242,9 +284,10 @@ class OpLinearQuantizerConfig(OpCompressorConfig):
     def check_dtype(self, attr, dtype):
         if not types.is_builtin(dtype):
             raise ValueError(f"Invalid dtype. Should be builtin dtype, but got {type(dtype)}")
-        if not (types.is_int(dtype) and dtype.get_bitwidth() in {4, 8}):
+        if not ((types.is_int(dtype) and dtype.get_bitwidth() in {4, 8}) or types.is_fp8(dtype)):
             raise ValueError(
-                f"Invalid dtype. Should be int4/8 or uint4/8, but got {types.builtin_to_string(dtype)}"
+                "Invalid dtype. Should be int4/8, uint4/8, fp8e4m3fn or fp8e5m2, but got "
+                f"{types.builtin_to_string(dtype)}"
             )
 
     @granularity.validator
@@ -263,6 +306,24 @@ class OpLinearQuantizerConfig(OpCompressorConfig):
         if types.is_int(self.dtype):
             self.nbits = self.dtype.get_bitwidth()
             self.signed = not self.dtype.is_unsigned()
+
+        if types.is_fp8(self.dtype):
+            if self.mode != "LINEAR_SYMMETRIC":
+                raise ValueError(
+                    f'FP8 quantization is symmetric; use mode="linear_symmetric", got "{self.mode}".'
+                )
+            if self.fp8_max is not None and not 0 < self.fp8_max <= types.builtin_to_fp8_max(self.dtype):
+                raise ValueError(
+                    f"fp8_max must be in (0, {types.builtin_to_fp8_max(self.dtype)}] for "
+                    f"{types.builtin_to_string(self.dtype)}, got {self.fp8_max}."
+                )
+            if self.fp8_encoding == "palette":
+                if self.dtype != types.fp8e4m3fn:
+                    raise ValueError('fp8_encoding="palette" only supports dtype "fp8e4m3fn".')
+                if self.granularity == CompressionGranularity.PER_BLOCK:
+                    raise ValueError(
+                        'fp8_encoding="palette" supports "per_tensor" and "per_channel" granularity.'
+                    )
 
     @classmethod
     def _from_dict(cls, config_dict: Dict[str, Any]) -> OpLinearQuantizerConfig:

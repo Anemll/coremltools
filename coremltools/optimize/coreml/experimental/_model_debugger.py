@@ -182,6 +182,16 @@ class ModelDebugger:
         )
         self.__cached_models = {}
 
+        # Core ML's CPU runtime returns zeros for an extra output that also feeds the `cast`
+        # producing a model output (seen on macOS 27), so such tensors take their range from that
+        # model output instead: {cast input name: model output name}.
+        self.__cast_output_sources = {}
+        for output_name in output_names:
+            operation = self.block_info.operations.get(output_name)
+            if operation is not None and operation.spec.type == "cast":
+                source = operation.spec.inputs["x"].arguments[0].name
+                self.__cast_output_sources[source] = output_name
+
     @property
     def output_names(self):
         return self.__class__.unique([output.name for output in self.outputs])
@@ -324,4 +334,7 @@ class ModelDebugger:
             }
 
             for output_name, output_value in intermediate_outputs.items():
+                cast_output_name = self.__cast_output_sources.get(output_name)
+                if cast_output_name in outputs:
+                    output_value = outputs[cast_output_name]
                 self.record_intermediate_output(output_value, output_name, activation_stats_dict)

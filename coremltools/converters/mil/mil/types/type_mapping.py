@@ -20,10 +20,12 @@ from .type_complex import complex64 as types_complex64
 from .type_complex import complex128 as types_complex128
 from .type_complex import is_complex
 from .type_dict import is_dict
+from .type_double import fp8e4m3fn as types_fp8e4m3fn
+from .type_double import fp8e5m2 as types_fp8e5m2
 from .type_double import fp16 as types_fp16
 from .type_double import fp32 as types_fp32
 from .type_double import fp64 as types_fp64
-from .type_double import is_float
+from .type_double import is_float, is_fp8
 from .type_int import SUB_BYTE_DTYPE_METADATA_KEY
 from .type_int import int4 as types_int4
 from .type_int import int8 as types_int8
@@ -52,6 +54,16 @@ from .type_int import uint64 as types_uint64
 from .type_list import is_list
 from .type_str import str as types_str
 from .type_unknown import unknown
+
+# numpy has no FP8 dtypes; FP8 values use the ml_dtypes ones when that package is installed.
+try:
+    import ml_dtypes as _ml_dtypes
+except ImportError:
+    _ml_dtypes = None
+
+_MSG_ML_DTYPES_NOT_FOUND = "FP8 types need the ml_dtypes package. Install it with `pip install ml_dtypes`."
+
+_FP8_MAX = {types_fp8e4m3fn: 448.0, types_fp8e5m2: 57344.0}
 
 _TYPES_TO_NPTYPES = {
     types_bool: np.bool_,
@@ -111,6 +123,8 @@ _TYPES_TO_STRINGS = {
     types_uint16: "uint16",
     types_uint32: "uint32",
     types_uint64: "uint64",
+    types_fp8e4m3fn: "fp8e4m3fn",
+    types_fp8e5m2: "fp8e5m2",
     types_fp16: "fp16",
     types_fp32: "fp32",
     types_fp64: "fp64",
@@ -154,16 +168,29 @@ _TYPES_TO_RANGE = {
     types_uint16: RangeTuple(np.iinfo(np.uint16).min, np.iinfo(np.uint16).max),
     types_int32: RangeTuple(np.iinfo(np.int32).min, np.iinfo(np.int32).max),
     types_int64: RangeTuple(np.iinfo(np.int64).min, np.iinfo(np.int64).max),
+    types_fp8e4m3fn: RangeTuple(-_FP8_MAX[types_fp8e4m3fn], _FP8_MAX[types_fp8e4m3fn]),
+    types_fp8e5m2: RangeTuple(-_FP8_MAX[types_fp8e5m2], _FP8_MAX[types_fp8e5m2]),
     types_fp16: RangeTuple(np.finfo(np.float16).min, np.finfo(np.float16).max),
     types_fp32: RangeTuple(np.finfo(np.float32).min, np.finfo(np.float32).max),
     types_fp64: RangeTuple(np.finfo(np.float64).min, np.finfo(np.float64).max),
 }
+
+if _ml_dtypes is not None:
+    for _fp8_type, _fp8_nptype in (
+        (types_fp8e4m3fn, _ml_dtypes.float8_e4m3fn),
+        (types_fp8e5m2, _ml_dtypes.float8_e5m2),
+    ):
+        _TYPES_TO_NPTYPES[_fp8_type] = _fp8_nptype
+        _NPTYPES_TO_STRINGS[_fp8_nptype] = _TYPES_TO_STRINGS[_fp8_type]
+        _TYPES_TO_RESOLUTION[_fp8_type] = float(_ml_dtypes.finfo(_fp8_nptype).resolution)
 
 BUILTIN_TO_PROTO_TYPES = {
     # bool:
     types_bool: _mil_pm.BOOL,
 
     # fp
+    types_fp8e4m3fn: _mil_pm.FLOAT8E4M3FN,
+    types_fp8e5m2: _mil_pm.FLOAT8E5M2,
     types_fp16: _mil_pm.FLOAT16,
     types_fp32: _mil_pm.FLOAT32,
     types_fp64: _mil_pm.FLOAT64,
@@ -244,7 +271,16 @@ def nptype_from_builtin(btype):
     """
     Given a builtin type, return its corresponding Numpy dtype.
     """
+    if is_fp8(btype) and _ml_dtypes is None:
+        raise ImportError(_MSG_ML_DTYPES_NOT_FOUND)
     return _TYPES_TO_NPTYPES[btype]
+
+
+def builtin_to_fp8_max(builtin_type: type) -> float:
+    """
+    Given an FP8 builtin type, return its largest finite value (448 for fp8e4m3fn, 57344 for fp8e5m2).
+    """
+    return _FP8_MAX[builtin_type]
 
 
 def builtin_to_resolution(builtin_type: type):
@@ -281,6 +317,15 @@ def promote_types(dtype1, dtype2):
         >>> promote_types(fp16, int32)
             builtin('fp16')
     """
+    if is_fp8(dtype1) or is_fp8(dtype2):
+        # numpy does not know how to promote the ml_dtypes FP8 types, so handle them here.
+        if dtype1 == dtype2:
+            return dtype1
+        if is_fp8(dtype1) and is_fp8(dtype2):
+            return types_fp16
+        fp8_dtype, other = (dtype1, dtype2) if is_fp8(dtype1) else (dtype2, dtype1)
+        return other if is_float(other) else fp8_dtype
+
     nptype1 = nptype_from_builtin(dtype1)
     nptype2 = nptype_from_builtin(dtype2)
     # Circumvent the undesirable np type promotion:
@@ -399,6 +444,18 @@ def is_builtin(t):
     return is_scalar(t) or is_tensor(t) or is_str(t) or is_tuple(t)
 
 
+def _fp8_builtin_from_nptype(nptype) -> Optional[type]:
+    """Return the FP8 builtin type for an ml_dtypes float8 dtype (or scalar type), else None."""
+    if _ml_dtypes is None:
+        return None
+    scalar_type = nptype.type if isinstance(nptype, np.dtype) else nptype
+    if scalar_type is _ml_dtypes.float8_e4m3fn:
+        return types_fp8e4m3fn
+    if scalar_type is _ml_dtypes.float8_e5m2:
+        return types_fp8e5m2
+    return None
+
+
 def _numpy_dtype_instance_to_builtin_type(np_dtype: np.dtype) -> Optional[type]:
     metadata_dict = np_dtype.metadata
     if metadata_dict is not None and SUB_BYTE_DTYPE_METADATA_KEY in metadata_dict:
@@ -414,6 +471,10 @@ def numpy_type_to_builtin_type(nptype) -> type:
     Converts a numpy type to its builtin `types` equivalent.
     Supports Python native types and numpy types.
     """
+    fp8_type = _fp8_builtin_from_nptype(nptype)
+    if fp8_type is not None:
+        return fp8_type
+
     if isinstance(nptype, np.dtype):
         builtin_type = _numpy_dtype_instance_to_builtin_type(nptype)
         if builtin_type is not None:
@@ -472,6 +533,10 @@ def numpy_type_to_builtin_type(nptype) -> type:
 # Tries to get the equivalent builtin type of a
 # numpy or python type.
 def type_to_builtin_type(type):
+    fp8_type = _fp8_builtin_from_nptype(type)
+    if fp8_type is not None:
+        return fp8_type
+
     # Infer from numpy type if it is one
     if type.__module__ == np.__name__:
         return numpy_type_to_builtin_type(type)

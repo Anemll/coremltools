@@ -47,6 +47,8 @@ namespace CoreML {
             u_int64_t write_int32_data(const py::array_t<int32_t>& data);
             u_int64_t write_uint32_data(const py::array_t<uint32_t>& data);
             u_int64_t write_fp16_data(const py::array_t<uint16_t>& data);
+            u_int64_t write_fp8e4m3fn_data(const py::array_t<uint8_t>& data);
+            u_int64_t write_fp8e5m2_data(const py::array_t<uint8_t>& data);
             u_int64_t write_float_data(const py::array_t<float>& data);
 
         private:
@@ -76,6 +78,8 @@ namespace CoreML {
             py::array_t<int32_t> read_int32_data(uint64_t offset);
             py::array_t<uint32_t> read_uint32_data(uint64_t offset);
             py::array_t<uint16_t> read_fp16_data(uint64_t offset);
+            py::array_t<uint8_t> read_fp8e4m3fn_data(uint64_t offset);
+            py::array_t<uint8_t> read_fp8e5m2_data(uint64_t offset);
             py::array_t<float> read_float_data(uint64_t offset);
 
 

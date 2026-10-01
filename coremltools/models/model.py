@@ -603,6 +603,10 @@ class MLModel:
         # Drop the proxy first so CoreML's mmap of the compiled model is
         # released before we rmtree the backing package directory.
         self.__proxy__ = None
+        fp8_compiled_dir = getattr(self, "_fp8_compiled_dir", None)
+        if fp8_compiled_dir and _os is not None:
+            _shutil.rmtree(fp8_compiled_dir, ignore_errors=True)
+            self._fp8_compiled_dir = None
         pkg = getattr(self, "package_path", None)
         if getattr(self, "is_temp_package", False) and pkg:
             if _os is not None and _os.path.exists(pkg):
@@ -648,6 +652,16 @@ class MLModel:
                         optimization_hints_str_vals[k] = v.name
 
             try:
+                if _os.path.isdir(filename) and not filename.rstrip("/").endswith(".mlmodelc"):
+                    from . import _fp8_compile
+
+                    # The Core ML compiler crashes on FP8 constexpr weights, so compile around it
+                    # and load the compiled model instead of letting the proxy compile the package.
+                    if _fp8_compile.needs_fp8_compile_workaround(specification):
+                        self._fp8_compiled_dir = _tempfile.mkdtemp()
+                        filename = _fp8_compile.compile_with_fp8_workaround(
+                            filename, _os.path.join(self._fp8_compiled_dir, "model.mlmodelc")
+                        )
                 return (
                     _MLModelProxy(
                         filename,

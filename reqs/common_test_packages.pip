@@ -5,6 +5,7 @@ boto3==1.39.3; python_version >= '3.13'
 configparser
 future
 
+ml_dtypes
 olefile==0.44
 pandas
 parameterized==0.8.1

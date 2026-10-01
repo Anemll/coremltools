@@ -48,6 +48,8 @@ PYBIND11_PLUGIN(libmilstoragepython) {
       .def("write_int32_data", &MilStoragePythonWriter::write_int32_data)
       .def("write_uint32_data", &MilStoragePythonWriter::write_uint32_data)
       .def("write_fp16_data", &MilStoragePythonWriter::write_fp16_data)
+      .def("write_fp8e4m3fn_data", &MilStoragePythonWriter::write_fp8e4m3fn_data)
+      .def("write_fp8e5m2_data", &MilStoragePythonWriter::write_fp8e5m2_data)
       .def("write_float_data", &MilStoragePythonWriter::write_float_data);
 
     py::class_<MilStoragePythonReader> blobStorageReader(m, "_BlobStorageReader", py::module_local());
@@ -65,6 +67,8 @@ PYBIND11_PLUGIN(libmilstoragepython) {
       .def("read_int32_data", &MilStoragePythonReader::read_int32_data)
       .def("read_uint32_data", &MilStoragePythonReader::read_uint32_data)
       .def("read_fp16_data", &MilStoragePythonReader::read_fp16_data)
+      .def("read_fp8e4m3fn_data", &MilStoragePythonReader::read_fp8e4m3fn_data)
+      .def("read_fp8e5m2_data", &MilStoragePythonReader::read_fp8e5m2_data)
       .def("read_float_data", &MilStoragePythonReader::read_float_data);
 
     return m.ptr();

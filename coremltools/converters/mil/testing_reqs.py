@@ -22,6 +22,7 @@ _SUPPORTED_OPSET_VERSIONS_MLPROGRAM = (
     ct.target.iOS16,
     ct.target.iOS17,
     ct.target.iOS18,
+    ct.target.iOS26,
 )
 
 

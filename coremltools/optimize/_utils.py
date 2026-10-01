@@ -29,15 +29,19 @@ QuantParams = namedtuple("QuantParams", "data scale offset nbits")
 
 
 def get_quant_range_by_dtype(
-    dtype: types, mode: str
+    dtype: types, mode: str, fp8_max: Optional[float] = None
 ) -> Tuple[Union[int, float], Union[int, float]]:
     if types.is_int(dtype):
         nbits = dtype.get_bitwidth()
         signed = not dtype.is_unsigned()
         return get_quant_range(nbits, signed, mode)
+    elif types.is_fp8(dtype):
+        # FP8 is symmetric; `fp8_max` can shrink the range (e.g. 240 for Neural Engine weights).
+        fp8_max = types.builtin_to_fp8_max(dtype) if fp8_max is None else fp8_max
+        return -fp8_max, fp8_max
     else:
         raise NotImplementedError(
-            "Only support getting quant range for int dtype, "
+            "Only support getting quant range for int and fp8 dtypes, "
             f"but got {types.builtin_to_string(dtype)}"
         )
 
@@ -85,8 +89,14 @@ def quantize_weight_by_dtype(
     axes: Union[int, Tuple[int, ...]],
     dtype: types,
     quantization_mode: str,
+    fp8_max: Optional[float] = None,
 ) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
-    """Similar to `quantize_weight, but use `dtype` to specify quant dtype."""
+    """
+    Similar to `quantize_weight, but use `dtype` to specify quant dtype.
+
+    For FP8 dtypes the quantized data stays unrounded float (the cast to the FP8 dtype rounds it),
+    and ``fp8_max`` optionally caps the FP8 range.
+    """
     if not np.issubdtype(weight.dtype, np.floating):
         # In principle, all dtypes are quantizable, e.g. int can be cast to float then quantize
         # In practise, Core ML constexpr dequantization ops return float,
@@ -95,7 +105,7 @@ def quantize_weight_by_dtype(
 
     val_min = np.amin(weight, axis=axes, keepdims=True)
     val_max = np.amax(weight, axis=axes, keepdims=True)
-    q_val_min, q_val_max = get_quant_range_by_dtype(dtype, quantization_mode)
+    q_val_min, q_val_max = get_quant_range_by_dtype(dtype, quantization_mode, fp8_max)
     zero_point = None
 
     if quantization_mode == "LINEAR_SYMMETRIC":
@@ -110,7 +120,11 @@ def quantize_weight_by_dtype(
         val_max = np.maximum(0.0, val_max)
 
     scale = (val_max - val_min) / (q_val_max - q_val_min)
-    quantized_data = np.round(weight / scale)
+    if types.is_fp8(dtype):
+        # All-zero blocks have scale 0; divide by 1 there so they quantize to 0 instead of NaN.
+        quantized_data = weight / np.where(scale == 0, 1, scale)
+    else:
+        quantized_data = np.round(weight / scale)
 
     if types.is_int(dtype):
         if quantization_mode == "LINEAR_SYMMETRIC" and dtype.is_unsigned():
@@ -186,7 +200,12 @@ def quantize_by_scale_and_zp(
 
     if _need_manual_broadcast(scale, input_data):
         scale = repeat_data_as(scale, input_data.shape)
-    quantized_data = input_data / scale
+    if types.is_fp8(output_dtype):
+        # Divide in fp32 like Core ML. After the saturating clip below, the cast to FP8 rounds to
+        # nearest, ties to even (Core ML devices can round exact ties differently).
+        quantized_data = input_data.astype(np.float32) / scale.astype(np.float32)
+    else:
+        quantized_data = input_data / scale
     if types.is_int(output_dtype):
         quantized_data = np.around(quantized_data)
     if zero_point is not None:
@@ -248,6 +267,7 @@ def compute_qparams_by_dtype(
     dtype: types,
     quantization_mode: str,
     block_sizes: List[int],
+    fp8_max: Optional[float] = None,
 ) -> Optional[Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]]:
     """
     Similar to `compute_qparams`, ut use `dtype` to specify quant dtype.
@@ -287,7 +307,7 @@ def compute_qparams_by_dtype(
     axes = tuple(filter(lambda x: x not in axes_to_skip, range(len(new_shape))))
 
     quantized_data, scale, zero_point = quantize_weight_by_dtype(
-        weight.reshape(new_shape), axes, dtype, quantization_mode
+        weight.reshape(new_shape), axes, dtype, quantization_mode, fp8_max
     )
 
     np_dtype = types.nptype_from_builtin(dtype)

@@ -319,12 +319,15 @@ class fuse_elementwise_to_batchnorm(AbstractGraphPass):
             return False
 
         out_name = add_op.outputs[0].name
+        # batch_norm needs all its parameters in the input's dtype (the pass can run on fp16 programs).
+        np_dtype = _types.nptype_from_builtin(non_const_input_mul.dtype)
         x = mb.batch_norm(
             x=non_const_input_mul,
-            mean=np.zeros((C,), np.float32),
-            variance=np.ones((C,), np.float32),
-            gamma=np.squeeze(gamma),
-            beta=np.squeeze(beta),
+            mean=np.zeros((C,), np_dtype),
+            variance=np.ones((C,), np_dtype),
+            gamma=np.squeeze(gamma).astype(np_dtype),
+            beta=np.squeeze(beta).astype(np_dtype),
+            epsilon=np_dtype(1e-5),
             name=out_name,
             before_op=mul_op,
         )

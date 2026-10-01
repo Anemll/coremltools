@@ -37,6 +37,7 @@ IOS_TO_MINIMUM_MACOS_VERSION: Dict[ct.target, int] = {
     ct.target.iOS16: 13,
     ct.target.iOS17: 14,
     ct.target.iOS18: 15,
+    ct.target.iOS26: 26,
 }
 
 _COREMLTOOLS_DEBUG_SAVE_MLMODEL_DIRECTORY = "/tmp/coremltools_debug_save_mlmodel"

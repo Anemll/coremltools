@@ -1217,6 +1217,10 @@ class linear_quantize_weights(AbstractCompressionPass):
     """
     _SUPPORTED_CONFIG_TYPE = OpLinearQuantizerConfig
 
+    # The Neural Engine reads FP8 weights like IEEE E4M3, whose largest finite value is 240;
+    # larger E4M3FN codes (up to 448) become infinity there.
+    _ANE_FP8E4M3_WEIGHT_MAX = 240.0
+
     def _validate_child_constexpr_for_compress(self, op: Operation) -> bool:
         """
         Overrides external method to support joint compression for iOS18+.
@@ -1312,9 +1316,12 @@ class linear_quantize_weights(AbstractCompressionPass):
         dtype: Union["types", str],
         mode: str,
         block_sizes: List[int],
+        fp8_max: Optional[float] = None,
     ) -> Optional["optimize_utils.QuantParams"]:
         """
         Similar to `blockwise_compress`, but use `dtype` to specify quant dtype.
+
+        For FP8 dtypes, ``fp8_max`` optionally caps the FP8 range (see ``OpLinearQuantizerConfig``).
         """
         if isinstance(dtype, str):
             dtype = types.string_to_builtin(dtype)
@@ -1324,6 +1331,7 @@ class linear_quantize_weights(AbstractCompressionPass):
             dtype,
             mode,
             block_sizes,
+            fp8_max,
         )
 
         if result is None:
@@ -1372,6 +1380,113 @@ class linear_quantize_weights(AbstractCompressionPass):
             name=op.name + "_quantized",
         )
 
+    def _encode_fp8_palette(
+        self,
+        op: Operation,
+        op_config: OpLinearQuantizerConfig,
+        weight: np.ndarray,
+        block_sizes: List[int],
+        fp8_max: Optional[float],
+    ):
+        """
+        Store FP8 weights as 8-bit palette indices into a table of the E4M3 values, which the Core ML
+        compiler accepts and the Neural Engine runs as native FP8 weights. The scale stays outside the
+        weights, around each consuming op (see ``_apply_scale_around_fp8_palette_consumer``).
+        """
+        weight_var = op.outputs[0]
+        consumers = list(weight_var.child_ops)
+        if (
+            len(consumers) == 0
+            or weight_var in op.enclosing_block.outputs
+            or any(
+                child.op_type not in ("conv", "linear") or child.weight is not weight_var
+                for child in consumers
+            )
+        ):
+            logger.warning(
+                f'fp8_encoding="palette" needs a weight used only as the weight of conv or linear '
+                f"ops. Skipped {op.name}."
+            )
+            return
+
+        quant_params = self.blockwise_compress_by_dtype(
+            weight, op_config.dtype, op_config.mode, block_sizes, fp8_max
+        )
+        if quant_params is None:
+            logger.warning(f"Cannot perform quantization on {op.name}. Skipped this op.")
+            return
+
+        # Entry i of the table is the E4M3 value whose bit pattern is i (NaN codes map to 0).
+        np_fp8_dtype = types.nptype_from_builtin(op_config.dtype)
+        table = np.arange(256, dtype=np.uint8).view(np_fp8_dtype).astype(np.float32)
+        table = np.nan_to_num(table, nan=0.0).astype(weight.dtype)
+        palette = mb.constexpr_lut_to_dense(
+            indices=quant_params.data.view(np.uint8),
+            lut=table.reshape([1] * weight.ndim + [256, 1]),
+            before_op=op,
+            name=op.name + "_fp8_palette",
+        )
+        scale = quant_params.scale.astype(np.float32).reshape(-1)
+        for consumer in consumers:
+            self._apply_scale_around_fp8_palette_consumer(consumer, palette, scale)
+        op.enclosing_block.remove_ops([op])
+
+    @staticmethod
+    def _apply_scale_around_fp8_palette_consumer(consumer: Operation, palette: Var, scale: np.ndarray):
+        """
+        Rewrite ``op(x, scale * q, bias)`` as ``op(a * x, q, bias * a / scale) * (scale / a)``.
+
+        The weights ``q`` stay exact E4M3 values. ``a`` is the largest channel scale rounded down
+        to a power of two, so the prescale is exact and the prescaled activations stay out of the
+        fp16 subnormals. The codes of every channel span the same range, so each unscaled channel
+        output is about as large as the output of the largest-scale channel. If moving the bias
+        inside would make it too large for fp16, it is added after the post-scale instead.
+        """
+        np_dtype = types.nptype_from_builtin(consumer.x.dtype)
+        nonzero = scale[scale > 0]
+        alpha = float(2.0 ** np.floor(np.log2(nonzero.max()))) if nonzero.size > 0 else 1.0
+        # A channel with scale 0 has all-zero weights, so its output is just the bias.
+        post_scale = np.where(scale > 0, scale / alpha, 1.0)
+
+        inputs = dict(consumer.inputs)
+        inputs["x"] = mb.mul(
+            x=consumer.x, y=np_dtype(alpha), before_op=consumer, name=consumer.name + "_fp8_prescale"
+        )
+        inputs["weight"] = palette
+        bias_after = None
+        if inputs.get("bias") is not None:
+            bias = inputs["bias"].val.astype(np.float32)
+            if np.abs(bias / post_scale).max() <= np.finfo(np.float16).max / 4:
+                inputs["bias"] = (bias / post_scale).astype(np_dtype)
+            else:
+                bias_after = bias.astype(np_dtype)
+                inputs.pop("bias")
+
+        out_name = consumer.outputs[0].name
+        need_post_scale = not np.allclose(post_scale, 1.0)
+        # conv outputs are [N, C_out, ...]; linear outputs are [..., C_out].
+        channel_shape = [1] * consumer.outputs[0].rank
+        channel_shape[1 if consumer.op_type == "conv" else -1] = -1
+        out = getattr(mb, consumer.op_type)(
+            **inputs,
+            before_op=consumer,
+            name=out_name if not need_post_scale and bias_after is None else consumer.name + "_fp8",
+        )
+        if need_post_scale:
+            out = mb.mul(
+                x=out,
+                y=post_scale.astype(np_dtype).reshape(channel_shape),
+                before_op=consumer,
+                name=out_name if bias_after is None else consumer.name + "_fp8_postscale",
+            )
+        if bias_after is not None:
+            out = mb.add(x=out, y=bias_after.reshape(channel_shape), before_op=consumer, name=out_name)
+
+        consumer.enclosing_block.replace_uses_of_var_after_op(
+            anchor_op=consumer, old_var=consumer.outputs[0], new_var=out
+        )
+        consumer.enclosing_block.remove_ops([consumer])
+
     def transform_op(self, op: Operation):
         op_config: Optional[OpLinearQuantizerConfig] = self.config._get_const_op_config(op)
         if op_config is None:
@@ -1387,6 +1502,17 @@ class linear_quantize_weights(AbstractCompressionPass):
                 raise ValueError(err_msg.format("per_block"))
             if op_config.dtype in {types.int4, types.uint4}:
                 raise ValueError(err_msg.format("4-bit"))
+
+        fp8_max = None
+        if types.is_fp8(op_config.dtype):
+            if not is_current_opset_version_compatible_with(AvailableTarget.iOS26):
+                raise ValueError(
+                    "FP8 quantization is supported since iOS26. Please re-convert your model with "
+                    "minimum_deployment_target set to at least ct.target.iOS26."
+                )
+            fp8_max = op_config.fp8_max
+            if fp8_max is None and op_config.dtype == types.fp8e4m3fn:
+                fp8_max = self._ANE_FP8E4M3_WEIGHT_MAX
 
         weight_to_compress = op.outputs[0].val
 
@@ -1436,11 +1562,22 @@ class linear_quantize_weights(AbstractCompressionPass):
             )
             return
 
+        if (
+            types.is_fp8(op_config.dtype)
+            and op_config.fp8_encoding == "palette"
+            and not self.fake_compression
+        ):
+            if self.joint_compression:
+                raise NotImplementedError('fp8_encoding="palette" does not support joint compression.')
+            self._encode_fp8_palette(op, op_config, weight_to_compress, block_sizes, fp8_max)
+            return
+
         quant_params = self.blockwise_compress_by_dtype(
             weight_to_compress,
             op_config.dtype,
             op_config.mode,
             block_sizes,
+            fp8_max,
         )
 
         if quant_params is None:
@@ -1659,7 +1796,9 @@ class insert_prefix_quantize_dequantize_pair(AbstractActCompressionPass):
             )
         self._activation_stats = activation_stats
 
-    def _construct_quant_dequant_op(self, input_var: Var, dtype: types, mode: str) -> Operation:
+    def _construct_quant_dequant_op(
+        self, input_var: Var, dtype: types, mode: str, fp8_max: Optional[float] = None
+    ) -> Operation:
         """Construct new quant-dequant pairs based on an input var."""
         input_min_max = optimize_utils.get_min_and_max_values(
             self._activation_stats, var_name=input_var.name
@@ -1671,6 +1810,7 @@ class insert_prefix_quantize_dequantize_pair(AbstractActCompressionPass):
             axes=0,
             dtype=dtype,
             quantization_mode=mode,
+            fp8_max=fp8_max,
         )
         scale_dtype = np.float16 if input_var.dtype == types.fp16 else np.float32
         scale = scale.astype(scale_dtype)
@@ -1711,7 +1851,7 @@ class insert_prefix_quantize_dequantize_pair(AbstractActCompressionPass):
         new_op_args = dict()
         new_op_args.update(op.inputs.items())
         new_op_args["x"] = self._construct_quant_dequant_op(
-            op.inputs["x"], op_config.dtype, op_config.mode
+            op.inputs["x"], op_config.dtype, op_config.mode, op_config.fp8_max
         )
         if op.op_type in self.SUPPORTED_BINARY_OP_TYPES:
             """
@@ -1730,7 +1870,7 @@ class insert_prefix_quantize_dequantize_pair(AbstractActCompressionPass):
             if y_is_const:
                 return  # Both inputs x and y need to be non-const.
             new_op_args["y"] = self._construct_quant_dequant_op(
-                op.inputs["y"], op_config.dtype, op_config.mode
+                op.inputs["y"], op_config.dtype, op_config.mode, op_config.fp8_max
             )
 
         new_op_args["name"] = op.name

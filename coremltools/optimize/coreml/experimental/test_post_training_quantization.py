@@ -160,6 +160,21 @@ class TestGetActivationStats(TestActivationQuantization):
         mlmodel = self._get_test_mlmodel_conv_relu()
         _get_activation_calibration_stats(mlmodel, sample_data)
 
+    def test_get_activation_calibration_stats_output_cast_input(self):
+        """
+        The fp16 tensor feeding the cast to an fp32 model output gets its real range. As an extra
+        output, Core ML's CPU runtime returns zeros for it (macOS 27), which gave a zero scale.
+        """
+        sample_data = [{"data": np.random.rand(5, 10, 4, 4)} for _ in range(3)]
+        mlmodel = self._get_test_mlmodel_conv_relu()
+        activation_stats = _get_activation_calibration_stats(mlmodel, sample_data)
+
+        main = mlmodel._mil_program.functions["main"]
+        output_casts = [op for op in main.find_ops(op_type="cast") if op.outputs[0] in main.outputs]
+        assert len(output_casts) == 1
+        output = mlmodel.predict(sample_data[0])[output_casts[0].outputs[0].name]
+        assert activation_stats[output_casts[0].x.name]["rmax"] >= output.max() > 0
+
     def test_get_activation_calibration_stats_skip_invalid_ops(self):
         """
         Calibration a floating point model with sample data.

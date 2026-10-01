@@ -14,12 +14,15 @@ from .type_bool import bool
 from .type_spec import Type
 
 
-def make_float(width):
-    delay_type_float = getattr(delay_type, "fp" + str(width))
+def make_float(width, name=None):
+    # FP8 formats share a width, so they are told apart by name (e.g. "fp8e4m3fn").
+    name = name or "fp" + str(width)
+    delay_type_float = getattr(delay_type, name)
 
     @class_annotate()
     class double:
         _width = width
+        _name = name
 
         def __init__(self, v=0.0):
             self._val = v
@@ -43,6 +46,8 @@ def make_float(width):
                         f"Types should have zero-rank ndarray input, got {v} instead."
                     )
 
+            elif v.dtype == nptype_from_builtin(self.__class__):
+                self._val = v
             elif isinstance(v, np.floating):
                 v_type = numpy_type_to_builtin_type(v.dtype)
                 if v_type.get_bitwidth() <= self.get_bitwidth():
@@ -64,7 +69,7 @@ def make_float(width):
 
         @classmethod
         def __type_info__(cls):
-            return Type("fp" + str(cls._width), python_class=cls)
+            return Type(cls._name, python_class=cls)
 
         @classmethod
         def get_bitwidth(cls):
@@ -147,17 +152,25 @@ def make_float(width):
         def __neg__(self):
             return double(-self.val)
 
-    double.__name__ = "fp%d" % double.get_bitwidth()
+    double.__name__ = name
     return double
 
 
+# FP8 formats. Numpy values use the ml_dtypes float8 dtypes (see type_mapping).
+fp8e4m3fn = make_float(8, "fp8e4m3fn")
+fp8e5m2 = make_float(8, "fp8e5m2")
 fp16 = make_float(16)
 fp32 = make_float(32)
 fp64 = make_float(64)
 float = fp32
 double = fp64
 
-_FLOAT_TYPES = (fp16, fp32, fp64)
+_FP8_TYPES = (fp8e4m3fn, fp8e5m2)
+_FLOAT_TYPES = _FP8_TYPES + (fp16, fp32, fp64)
 
 def is_float(t):
     return any(t is i or isinstance(t, i) for i in _FLOAT_TYPES)
+
+
+def is_fp8(t):
+    return any(t is i or isinstance(t, i) for i in _FP8_TYPES)

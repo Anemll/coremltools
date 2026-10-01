@@ -10,17 +10,35 @@ import numpy as np
 from attrs import define, field, validators
 from tqdm import tqdm
 
-from coremltools import _SPECIFICATION_VERSION_IOS_17
+from coremltools import _SPECIFICATION_VERSION_IOS_16, _SPECIFICATION_VERSION_IOS_17, _SPECIFICATION_VERSION_IOS_26
+from coremltools.converters.mil.mil import types as _types
 from coremltools.converters.mil.frontend.milproto import load as _milproto_to_pymil
 from coremltools.converters.mil.mil.passes.graph_pass import PassOption
 from coremltools.converters.mil.mil.passes.pass_registry import PASS_REGISTRY
 from coremltools.models import model as _model
 from coremltools.models import utils as _model_utils
 from coremltools.optimize.coreml import OptimizationConfig as _OptimizationConfig
+from coremltools.optimize.coreml._config import OpLinearQuantizerConfig as _OpLinearQuantizerConfig
 from coremltools.optimize.coreml._config import _MetaDataDict
 from coremltools.optimize.coreml.experimental._post_training_quantization import (
     _get_activation_calibration_stats,
 )
+
+def _spec_version_for_config(config: _OptimizationConfig, minimum: int) -> int:
+    """
+    The specification version a compression config needs. FP8 ops only exist from iOS26, so an
+    FP8 config upgrades an older model to the iOS26 opset instead of rejecting it.
+    """
+    op_configs = [config.global_config]
+    for configs in (config.op_type_configs, config.op_name_configs):
+        op_configs.extend((configs or {}).values())
+    if any(
+        isinstance(op_config, _OpLinearQuantizerConfig) and _types.is_fp8(op_config.dtype)
+        for op_config in op_configs
+    ):
+        return max(minimum, _SPECIFICATION_VERSION_IOS_26)
+    return minimum
+
 
 def _is_valid_const(val, weight_threshold):
     return isinstance(val, np.ndarray) and val.size >= weight_threshold
@@ -181,7 +199,11 @@ def linear_quantize_weights(
     blockwise_weight_quantizer.set_options(
         [PassOption("config", config), PassOption("joint_compression", joint_compression)]
     )
-    return _model_utils._apply_graph_pass(mlmodel, blockwise_weight_quantizer)
+    return _model_utils._apply_graph_pass(
+        mlmodel,
+        blockwise_weight_quantizer,
+        spec_version=_spec_version_for_config(config, _SPECIFICATION_VERSION_IOS_16),
+    )
 
 
 @_multifunction_unsupported
@@ -627,7 +649,7 @@ def linear_quantize_activations(
     mlmodel_activation_quantized = _model_utils._apply_graph_pass(
         mlmodel,
         graph_passes,
-        spec_version=_SPECIFICATION_VERSION_IOS_17,
+        spec_version=_spec_version_for_config(config, _SPECIFICATION_VERSION_IOS_17),
         pymil_load_func=_milproto_to_pymil.load,
         skip_model_load=mlmodel.__proxy__ is None,
     )

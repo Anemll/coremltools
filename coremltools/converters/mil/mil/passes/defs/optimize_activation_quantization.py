@@ -247,30 +247,53 @@ class insert_suffix_quantize_dequantize_pair(AbstractGraphPass):
 
         # Numerically the scale and zero point won't change if the input array only have two elements:
         # the min and max values of the input array. That's the trick to re-use optimize_utils.quantize_weight util.
-        _dtype = np.int8 if op_config.signed else np.uint8
-        _, _scale, _zero_point = optimize_utils.quantize_weight(
-            val,
-            axes=0,
-            nbits=8,
-            signed=op_config.signed,
-            quantization_mode=op_config.mode,
-            dtype=_dtype,
-        )
-        if _zero_point is None:
-            _zero_point = np.int32(0)
-        new_quantize_op = mb.quantize(
-            input=new_last_op,
-            scale=_scale,
-            zero_point=_zero_point.astype(_dtype),
-            output_dtype="int8" if op_config.signed else "uint8",
-            before_op=last_op,
-        )
-        new_dequantize_op = mb.dequantize(
-            input=new_quantize_op,
-            scale=_scale,
-            zero_point=_zero_point.astype(_dtype),
-            before_op=last_op,
-        )
+        if types.is_fp8(op_config.dtype):
+            # FP8 is symmetric, so there is no zero point.
+            _, _scale, _ = optimize_utils.quantize_weight_by_dtype(
+                val,
+                axes=0,
+                dtype=op_config.dtype,
+                quantization_mode=op_config.mode,
+                fp8_max=op_config.fp8_max,
+            )
+            if np.all(_scale == 0):
+                _scale = np.ones_like(_scale)
+            new_quantize_op = mb.quantize(
+                input=new_last_op,
+                scale=_scale,
+                output_dtype=types.builtin_to_string(op_config.dtype),
+                before_op=last_op,
+            )
+            new_dequantize_op = mb.dequantize(
+                input=new_quantize_op,
+                scale=_scale,
+                before_op=last_op,
+            )
+        else:
+            _dtype = np.int8 if op_config.signed else np.uint8
+            _, _scale, _zero_point = optimize_utils.quantize_weight(
+                val,
+                axes=0,
+                nbits=8,
+                signed=op_config.signed,
+                quantization_mode=op_config.mode,
+                dtype=_dtype,
+            )
+            if _zero_point is None:
+                _zero_point = np.int32(0)
+            new_quantize_op = mb.quantize(
+                input=new_last_op,
+                scale=_scale,
+                zero_point=_zero_point.astype(_dtype),
+                output_dtype="int8" if op_config.signed else "uint8",
+                before_op=last_op,
+            )
+            new_dequantize_op = mb.dequantize(
+                input=new_quantize_op,
+                scale=_scale,
+                zero_point=_zero_point.astype(_dtype),
+                before_op=last_op,
+            )
         ops_to_remove = [last_op]
 
         last_op_var_name = last_op.outputs[0].name

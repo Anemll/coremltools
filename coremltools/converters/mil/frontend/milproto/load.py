@@ -142,6 +142,10 @@ def _load_file_value(context, filevalue_spec, dtype):
     elif dtype == types.fp16:
         np_value_uint16 = blob_reader.read_fp16_data(offset)
         np_value = np.frombuffer(np_value_uint16.tobytes(), np.float16)
+    elif dtype == types.fp8e4m3fn:
+        np_value = blob_reader.read_fp8e4m3fn_data(offset).view(types.nptype_from_builtin(dtype))
+    elif dtype == types.fp8e5m2:
+        np_value = blob_reader.read_fp8e5m2_data(offset).view(types.nptype_from_builtin(dtype))
     elif dtype == types.fp32:
         np_value = blob_reader.read_float_data(offset)
     elif dtype == types.int32:

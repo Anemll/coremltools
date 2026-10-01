@@ -17,6 +17,16 @@
 #import <CoreML/CoreML.h>
 #import "LayerShapeConstraints.hpp"
 
+// Defined here so every source file sees it: the int8 MLMultiArray conversions in
+// CoreMLPythonArray.mm and CoreMLPythonUtils.mm depend on it.
+#ifndef BUILT_WITH_MACOS26_SDK
+#if TARGET_OS_OSX && defined(__MAC_26_0) && __MAC_OS_X_VERSION_MAX_ALLOWED >= __MAC_26_0
+#define BUILT_WITH_MACOS26_SDK 1
+#else
+#define BUILT_WITH_MACOS26_SDK 0
+#endif
+#endif
+
 namespace py = pybind11;
 
 namespace CoreML {
